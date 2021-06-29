@@ -1,0 +1,733 @@
+---
+title: 'Recommendations for QANTAS: USA airport infrastucture, and a domestic aircraft
+  storage facility'
+subtitle: ETC5512 Assignment 1, Master of Business Analytics
+author: "Prepared by Mohammed Faizan, 31939872, mfai0014@student.monash.edu"
+date: "April 16, 2021"
+output: 
+  html_document:
+    includes:
+      before_body: header.html
+keep_md: yes
+---
+# Introduction
+
+*"Every year, millions of people rely on the Qantas Group to take them somewhere.*
+*We’ve been serving communities for 100 years. And we know that our continued* 
+*success relies on combining day-to-day operational excellence with scanning the* 
+*horizon."* ~ **Qantas**[1]
+
+*"The Qantas Group is constantly transforming to make sure we’re well positioned* *for the future. That’s how we keep creating value for our stakeholders,* *opportunities for our people and world-class experiences for our customers.*
+*In the process, we aim to have a positive impact on the broader community and*
+*minimise our impact on the natural environment. And, above all, achieve the *
+*highest standards of safety and integrity."* ~ **Qantas**[1]
+
+Being commissioned as an independent Business analyst consultant for the chief data officer for Qantas*, this report apropos of analysis on the recommendation for the primary airport in the United States of America for Qantas flights into and out of USA. This report also contains recommendation on selecting a new plane storage facility - that has least impact on local endangered species, in Victoria, Australia.
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, 
+                      messages=FALSE, 
+                      warning=FALSE)
+library(tidyverse)
+library(plotly)
+library(visdat)
+library(naniar)
+library(lubridate)
+library(geosphere)
+library(ggmap)
+library(ggthemes)
+library(maps)
+library(bookdown)
+library(knitr)
+library(patchwork)
+```
+
+# Report: Recommendation for the primary airport into and out of the USA. {#bts}
+
+*Office of Airline Information, Bureau of Transportation Statistics*, oversights data provision for the domestic flight operation in USA. Supplementary Information has the overview of the BTS Flights data. Flights relating to two airports, DFW and LAX, are analyzed based on two performance criteria for the month of January, 2020.
+
+```{r raw-data, eval=FALSE}
+flights_raw <- read.csv(here::here("data/ONTIME_REPORTING.csv"))
+```
+
+```{r filtering-data, eval=FALSE}
+flights_DFW_org_subset <- flights_raw%>%filter(ORIGIN=="DFW")
+flights_LAX_org_subset <- flights_raw%>%filter(ORIGIN=="LAX")
+flights_DFW_dest_subset <- flights_raw%>%filter(DEST=="DFW")
+flights_LAX_dest_subset <- flights_raw%>%filter(DEST=="LAX")
+```
+
+
+```{r joining-data, eval=FALSE}
+flights <- data.frame()
+flights <- rbind(flights,flights_DFW_org_subset)
+flights <- rbind(flights,flights_DFW_dest_subset)
+flights <- rbind(flights,flights_LAX_org_subset)
+flights <- rbind(flights,flights_LAX_dest_subset)
+write.csv(flights,here::here("data/flights_filter_DFW_LAX.csv"), row.names = FALSE)
+
+```
+
+```{r reading_preparing_data, include=FALSE}
+#analysis begins here
+flights_filter_DFW_LAX <- read.csv(here::here("data/flights_filter_DFW_LAX.csv"))
+flights_filter_DFW_LAX <- subset(flights_filter_DFW_LAX,select = c(-X))
+
+airports <- read_csv(here::here("data/MASTER_CORD.csv")) %>%
+  select(-X29)
+airport_locations <- airports %>%
+  filter(AIRPORT_IS_LATEST == 1, AIRPORT_IS_CLOSED != 1,
+         AIRPORT_COUNTRY_CODE_ISO == "US") %>%
+  select(AIRPORT, DISPLAY_AIRPORT_NAME, LONGITUDE, LATITUDE,AIRPORT_STATE_NAME) 
+usa_bbox <- c(-130, # min long | Other Resources [6]
+              20, # min lat
+              -60, # max long
+              55) # max lat
+airport_locations <- airport_locations %>%
+  filter(LONGITUDE>usa_bbox[1], LONGITUDE<usa_bbox[3], 
+         LATITUDE>usa_bbox[2], LATITUDE<usa_bbox[4])
+
+flights_filter_DFW_LAX_location <- flights_filter_DFW_LAX %>% 
+  left_join(airport_locations, by=c("ORIGIN" = "AIRPORT")) %>% 
+  rename(ORIGIN_lon = LONGITUDE, ORIGIN_lat = LATITUDE, 
+         ORIGIN_name = DISPLAY_AIRPORT_NAME) %>%
+  left_join(airport_locations, by=c("DEST" = "AIRPORT")) %>%
+  rename(DEST_lon = LONGITUDE, DEST_lat = LATITUDE, 
+         DEST_name = DISPLAY_AIRPORT_NAME) 
+```
+```{r filters}
+flights_DFW_org <- flights_filter_DFW_LAX%>%filter(ORIGIN=="DFW")
+flights_LAX_org <- flights_filter_DFW_LAX%>%filter(ORIGIN=="LAX")
+flights_DFW_LAX_org <- rbind(flights_DFW_org,flights_LAX_org)
+flights_DFW_dest <- flights_filter_DFW_LAX%>%filter(DEST=="DFW")
+flights_LAX_dest <- flights_filter_DFW_LAX%>%filter(DEST=="LAX")
+flights_DFW_LAX_dest <- rbind(flights_DFW_dest,flights_LAX_dest)
+```
+
+## Connectivity across continental USA. {#connectivity}
+
+Connectivity is measured by the number of airports, and their spatial distribution across continental USA, that are connected by flights(both inbound and outbound) to the airports, DFW and LAX. The first insight, was developed by preparing the data for tallying flight records for airport network and flight traffic.
+
+```{r connectivity_overview}
+origin_LAX_DFW_dest <- flights_filter_DFW_LAX %>% 
+                    filter(ORIGIN %in% c("LAX","DFW")) %>%
+                      group_by(ORIGIN) %>% count(DEST, sort=-1)%>%rename(outbound_from_airport=n, airport=ORIGIN)
+dest_LAX_DFW_origin <- flights_filter_DFW_LAX %>% 
+                    filter(DEST %in% c("LAX","DFW")) %>%
+                      group_by(DEST) %>% 
+                        count(ORIGIN, sort=-1)%>%rename(inbound_to_airport=n, airport=DEST)
+#origin_LAX_DFW_dest #contains the number of flights from LAX and DFW to each airport
+#dest_LAX_DFW_origin   #contains the number of flights from each airport to LAX and DFW
+airport_flights_LAX_DFW_wider <- origin_LAX_DFW_dest%>%
+                            full_join(dest_LAX_DFW_origin,  by=c("DEST"="ORIGIN", "airport"="airport"))
+
+airport_flights_LAX_DFW <- airport_flights_LAX_DFW_wider %>%
+                            pivot_longer(cols=c("outbound_from_airport","inbound_to_airport"),
+                              names_to="outboundorinbound",
+                               values_to="n_flights") %>%
+                                  rename(other_airports=DEST)
+
+#airport_flights_LAX_DFW #number of inbound and otbound to each airport long format
+origin_LAX_DFW_num_airports <- data.frame(origin=c("DFW","LAX"),to_num_airport=c(length(unique(flights_DFW_org$DEST)),length(unique(flights_LAX_org$DEST))))
+
+dest_LAX_DFW_num_airports <- data.frame(dest=c("DFW","LAX"),from_num_airport=c(length(unique(flights_DFW_dest$ORIGIN)),length(unique(flights_LAX_dest$ORIGIN))))
+
+LAX_DFW_num_airports <- origin_LAX_DFW_num_airports %>%
+                          full_join(dest_LAX_DFW_num_airports, by=c("origin"="dest")) %>%
+                            rename(airport=origin)
+
+#origin_LAX_DFW_num_airports  #contains number of airports whose origin is LAX or DFW
+#dest_LAX_DFW_num_airports    #contains number of airports whose dest is LAX or DFW 
+
+origin_LAX_DFW_flights <- flights_filter_DFW_LAX %>% 
+                    filter(ORIGIN %in% c("LAX","DFW")) %>%
+                      group_by(ORIGIN) %>% count(ORIGIN, sort=-1) %>% rename(outbound_flights=n)
+dest_LAX_DFW_flights <- flights_filter_DFW_LAX %>% 
+                    filter(DEST %in% c("LAX","DFW")) %>%
+                      group_by(DEST) %>% count(DEST, sort=-1) %>% rename(inbound_flights=n)
+LAX_DFW_flights <- origin_LAX_DFW_flights %>%
+                          full_join(dest_LAX_DFW_flights,  by=c("ORIGIN"="DEST")) %>%
+                            rename(airport=ORIGIN)
+#origin_LAX_DFW_flights #contains the number of flights from LAX and DFW airports
+#dest_LAX_DFW_flights   #contains the number of flights to LAX and DFW airports
+#LAX_DFW_num_airports
+#LAX_DFW_flights
+
+LAX_DFW_overview <- LAX_DFW_num_airports %>%
+                          full_join(LAX_DFW_flights,  by=c("airport"="airport")) 
+#LAX_DFW_overview
+knitr::kable(LAX_DFW_overview, caption = "Overview of the Connectivity by Numbers")
+
+```
+It is noted that DFW has flights to and from almost double the number of airports than LAX and witnesses more traffic than LAX. However, even with half the number of connected airports, LAX witnesses `r LAX_DFW_overview$outbound_flights[2]/LAX_DFW_overview$outbound_flights[1]` percent flights of DFW. The spatial distribution is even for both DFW and LAX. Both airports are connected well spatially across the US. It is noted that, though LAX has a smaller networked airports than DFW, some airports are uniquely connected to LAX. However, LAX does not connect to airports in certain US states that are located in the central geography of the country. However, DFW and LAX are connected well by over 1150 flights.
+
+```{r map_airports, include=FALSE, eval=TRUE}
+usa_map <- get_map(location = usa_bbox, source = "osm")
+# Only continental locations will be considered
+flights_DFW_LAX_location_org <- flights_filter_DFW_LAX_location %>% 
+                                  filter(ORIGIN %in% c("LAX","DFW"))%>% 
+                                    group_by(ORIGIN)
+
+
+flights_DFW_LAX_location_dest <- flights_filter_DFW_LAX_location %>% 
+                                  filter(DEST %in% c("LAX","DFW"))%>% 
+                                    group_by(DEST)
+```
+
+```{r displaying_map_airports, fig.cap="Spatial Distribution of Airports Across USA", eval=TRUE}
+
+#Other Resources [6] 
+storage_coords_airport <- airport_locations%>%filter(AIRPORT %in% c("DFW","LAX"))
+
+ggmap(usa_map) + 
+      geom_point(data=flights_DFW_LAX_location_org, aes(x=DEST_lon, y=DEST_lat),
+             colour="#746FB2", alpha=0.5, size=2) + facet_grid(~ORIGIN)+
+  theme_map() + labs(title = "Spatial Distribution of Destination Airports")+annotate("label",x=storage_coords_airport$LONGITUDE[1],y=storage_coords_airport$LATITUDE[1],label="DFW")+annotate("label",x=storage_coords_airport$LONGITUDE[2],y=storage_coords_airport$LATITUDE[2],label="LAX")
+
+#ggmap(usa_map) + 
+#      geom_point(data=flights_DFW_LAX_location_dest, aes(x=ORIGIN_lon, y=ORIGIN_lat),
+#             colour="#746FB2", alpha=0.5, size=2) + facet_grid(~DEST)+
+#  theme_map()+ labs(title = "Spatial Distribution of Origin Airports")
+
+```
+
+
+
+```{r num_flights_to, fig.cap="Proportion across airports"}
+b <- airport_flights_LAX_DFW%>%ggplot()+geom_col(mapping = aes(x = other_airports, y = n_flights, fill = airport), position = "fill")+facet_wrap(~outboundorinbound,nrow=2)+labs(title="Proportion across airports", x="Other Airports", y= "Flight Density Proportional Distribution")
+#ggplotly(b)
+b
+```
+
+The traffic distribution across airports is skewed in the sense that airports connected to DFW and LAX by flights greater than 250 each for outbound and inbound traffic are less frequent. This suggests that a significant number of flights operate for only a few airports. The normalized distribution suggests that LAX has better flight distribution across than DFW which has frequent flights to fewer airports than LAX. Therefore, LAX is more reliable than DFW in terms of flight connectivity as the primary airport into and out of the USA.
+
+```{r plotting_traffic, fig.cap="Traffic distribution across airports"}
+#plotting traffic distribution
+
+temp <- airport_flights_LAX_DFW%>%ggplot()+geom_density(mapping = aes(x = n_flights, fill = airport))+facet_grid(airport~outboundorinbound)+labs(title="Traffic distribution across airports", xlab = "Airports", ylab = "Density")+theme(axis.text.x = element_text(angle=70))
+
+c <- airport_flights_LAX_DFW%>%
+  ggplot()+geom_col(mapping = aes(x = other_airports, y = n_flights, fill = airport))+facet_grid(airport~outboundorinbound)+labs(title="Traffic distribution across airports", xlab = "Airports", ylab = "Number of Flights")
+#ggplotly(c)
+
+temp+c+plot_layout(ncol=2,heights = c(4,4),widths = c(8,8))
+```
+
+```{r normalising_traffic_distribution, fig.cap="Normalising traffic distribution"}
+#normalising the flights distribution
+airport_flights_LAX_DFW%>%
+    mutate(n_flights_log = log10(n_flights+14)) %>%
+  ggplot()+geom_density(mapping = aes(x = n_flights_log, fill = airport))+facet_grid(airport~outboundorinbound)+labs(title="Traffic distribution across airports", xlab = "Airports", ylab = "Density")
+```
+
+## Delay in flight operation {#delay}
+
+Airport operation performance for delay in flights is best measured for an origin airport in terms of departure delay. And, for a destination airport the arrival delay must be considered. Other delays are caused by weather conditions and arrival/departure performance of the other airport and other factors.
+For passenger convenience, disregarding all other criteria for flight operation, flight transit time must be minimized. To accommodate maximum passengers(to include late check-in passengers) flights could depart later than the scheduled departure time and arrive faster than the scheduled arrival time( to fetch passengers some extra time). Hypothetically, a flight departing late and arriving earlier has the least transit time. However, the departure delay and the arrival delay share a linear relationship. This means if there is delay at origin, the flight is inherently late on arrival at the destination. Transit time assessment can be generalized by the following explanation and is considered to be characteristic of the flights relating to a particular airport.
+
+```{r dep_arr_relationship,message=FALSE, fig.cap="Departure Delay vs Arrival Delay",fig.width=4,fig.height=4}
+flights_DFW_LAX_org_rename <- flights_DFW_LAX_org%>%rename(airport=ORIGIN)%>%group_by(airport)
+flights_DFW_LAX_dest_rename <- flights_DFW_LAX_dest%>%rename(airport=DEST)%>%group_by(airport)
+ggplot()+geom_smooth(data=flights_DFW_LAX_org_rename,mapping = aes(x = DEP_DELAY, y = ARR_DELAY, colour = airport, alpha = 0.3))+geom_smooth(data=flights_DFW_LAX_dest_rename, mapping = aes(x = DEP_DELAY, y = ARR_DELAY, colour = airport, alpha = 0.1)) + facet_grid(~airport)+ coord_equal()
+```
+
+The box-plots below show the arrival and departure delays for DFW and LAX as both origin and destination. In order to reduce the transit time, a flight should not have linear arrival and departure delays. This means, when a flight has a positive departure delay, it should arrive on time or on negative arrive delay. Considering the median delay of the flights, delay statistics of that airport can be drawn. In the plot below, when DFW and LAX are the origin airports, it is observed that the departure delays of both airports are comparable. However, the arrival delay for flights originating from LAX shift downward arriving earlier than the flights originating from DFW. This pattern follows even for DFW and LAX as destination airports. Furthermore, the spread of arrival delay below median is more for LAX flights and the upper quartile of departure delay of DFW flights is high and positive which suggests that DFW flights depart late and thus arrive late. Furthermore, LAX performs better on busy days, Thursday and Friday. Thus, in comparision with DFW,in comparision with DFW, LAX is more reliable as the primary airport into and out of USA as it has more flights with arrival delays tending towards negative values(not far from 0) and fewer flights with arrival delays greater than zero.
+
+```{r box_plots_delays,fig.width=8,fig.height=4}
+#plotting box-plot for delays.
+
+flights_DFW_LAX_org_longer <- flights_DFW_LAX_org %>%
+   pivot_longer(cols = c("DEP_DELAY","ARR_DELAY"), 
+                names_to = "delay_type", 
+                values_to = "delay")
+delay_org_boxplt <-flights_DFW_LAX_org_longer %>%ggplot()+geom_boxplot(mapping = aes(x = ORIGIN, y = delay, group = ORIGIN), outlier.alpha = 0)+facet_grid(~delay_type)+coord_cartesian(ylim = c(-50,50))
+#ggplotly(delay_org_boxplt)
+
+
+flights_DFW_LAX_dest_longer <- flights_DFW_LAX_dest %>%
+   pivot_longer(cols = c("DEP_DELAY","ARR_DELAY"), 
+                names_to = "delay_type", 
+                values_to = "delay")
+delay_dest_boxplt <-flights_DFW_LAX_dest_longer %>%ggplot()+geom_boxplot(mapping = aes(x = DEST, y = delay, group = DEST), outlier.alpha = 0)+facet_grid(~delay_type)+coord_cartesian(ylim = c(-50,50))
+#ggplotly(delay_dest_boxplt)
+
+delay_org_boxplt+delay_dest_boxplt+plot_layout(heights = c(5,5),ncol=2)
+```
+```{r delay_distribution_density}
+temp1 <- flights_DFW_LAX_org_longer%>%
+        mutate(delay_log = log10(delay+30)) %>%
+  group_by(ORIGIN)%>%ggplot()+
+  geom_density(mapping = aes(x=delay, fill=ORIGIN,alpha=0.5))+facet_grid(~ORIGIN)+coord_cartesian(xlim=c(-50,0))
+temp <- flights_DFW_LAX_dest_longer%>%
+        mutate(delay_log = log10(delay+30)) %>%
+  group_by(DEST)%>%ggplot()+
+  geom_density(mapping = aes(x=delay, fill=DEST,alpha=0.5))+facet_grid(~DEST)+coord_cartesian(xlim=c(0,125))
+temp1+temp
+#flights_DFW_LAX_org_longer%>%
+#        mutate(delay_log = log10(delay+30)) %>%
+#  group_by(ORIGIN)%>%ggplot()+
+#  geom_density(mapping = aes(x=delay_log, fill=ORIGIN))+facet_grid(delay_type~ORIGIN)
+```
+ 
+```{r}
+delay_overview_org_arr <-flights_DFW_LAX_org %>% group_by(ORIGIN)  %>% summarise(min=min(ARR_DELAY, na.rm = TRUE),m10= quantile(ARR_DELAY,probs = 0.10, na.rm = TRUE),m1= quantile(ARR_DELAY,probs = 0.25, na.rm = TRUE),m2 = median(ARR_DELAY,probs = 0.25, na.rm = TRUE),m3=quantile(ARR_DELAY,probs = 0.75, na.rm = TRUE),m90= quantile(ARR_DELAY,probs = 0.90, na.rm = TRUE), max=max(ARR_DELAY, na.rm = TRUE)) %>%  mutate(delay_type=c("arrival delay"), DEST=c(NA,NA), quartile_range=m3-m1)
+#delay_overview_org_arr
+
+delay_overview_org_dep <- flights_DFW_LAX_org %>% group_by(ORIGIN) %>% summarise(min=min(DEP_DELAY, na.rm = TRUE),m10= quantile(DEP_DELAY,probs = 0.10, na.rm = TRUE),m1= quantile(DEP_DELAY,probs = 0.25, na.rm = TRUE),m2 = median(DEP_DELAY,probs = 0.25, na.rm = TRUE),m3=quantile(DEP_DELAY,probs = 0.75, na.rm = TRUE),m90= quantile(DEP_DELAY,probs = 0.90, na.rm = TRUE), max=max(DEP_DELAY, na.rm = TRUE))  %>% mutate(delay_type=c("departure delay"), DEST=c(NA,NA), quartile_range=m3-m1)
+#delay_overview_org_dep
+
+delay_overview_org <- rbind(delay_overview_org_arr,delay_overview_org_dep)
+
+#delay_overview_org 
+
+delay_overview_dest_arr <-flights_DFW_LAX_dest %>% group_by(DEST)  %>% summarise(min=min(ARR_DELAY, na.rm = TRUE),m10= quantile(ARR_DELAY,probs = 0.10, na.rm = TRUE),m1= quantile(ARR_DELAY,probs = 0.25, na.rm = TRUE),m2 = median(ARR_DELAY, na.rm = TRUE),m3=quantile(ARR_DELAY,probs = 0.75, na.rm = TRUE), m90= quantile(ARR_DELAY,probs = 0.90, na.rm = TRUE), max=max(ARR_DELAY, na.rm = TRUE)) %>%  mutate(delay_type=c("arrival delay"), ORIGIN=c(NA,NA), quartile_range=m3-m1)
+#delay_overview_dest_arr
+
+delay_overview_dest_dep <- flights_DFW_LAX_dest %>% group_by(DEST) %>% summarise(min=min(DEP_DELAY, na.rm = TRUE), m10= quantile(DEP_DELAY,probs = 0.10, na.rm = TRUE), m1= quantile(DEP_DELAY,probs = 0.25, na.rm = TRUE), m2 = median(DEP_DELAY, na.rm = TRUE),m3=quantile(DEP_DELAY,probs = 0.75, na.rm = TRUE), m90= quantile(DEP_DELAY,probs = 0.90, na.rm = TRUE), max=max(DEP_DELAY, na.rm = TRUE))  %>% mutate(delay_type=c("departure delay"), ORIGIN=c(NA,NA), quartile_range=m3-m1)
+#delay_overview_dest_dep
+
+delay_overview_dest <- rbind(delay_overview_dest_arr,delay_overview_dest_dep)
+
+#delay_overview_dest
+
+delay_overview_unorder <- rbind(delay_overview_org,delay_overview_dest)
+order1 <- c(1,5,3,7,2,6,4,8) #based on airport and delay type.
+order2 <- c(3,4,5,6,1,2,7,8)
+col_order <- c(1,10,9,2,3,4,5,6,7,8,11)
+delay_overview <- delay_overview_unorder[order2,col_order]
+delay_table <- knitr::kable(delay_overview, caption = "Delay distribution")
+delay_table
+```
+
+
+
+
+
+
+
+
+
+# Report: Recommendation on selecting new plane storage facility in Victoria, Australia. {#ala}
+
+"The Atlas of Living Australia (ALA) is a collaborative, digital, open infrastructure that pulls together Australian biodiversity data from multiple sources, making it accessible and reusable."~ ALA[2]
+Data was collected and records were filtered to assess the geographical area of 50km radius around Bendigo and Tullamarine each (plane storage facilities) for specific local endangered species in Victoria, Australia. The area that inhabits fewer species both in number and type is the selection criteria for the new plane storage facility.
+Bendigo is inhabited by only 2 species occurring and Tullamarine is inhabited by all 7 species occuring within its 50km radius over the past two decades. Of the two species, Anthochaera (Xanthomyza) phrygia and Ornithorhynchus anatinus, occurring at both locations, occurrence of Anthochaera (Xanthomyza) phrygia is comparable at both locations and Tullamarine has double the occurrences of Ornithorhynchus anatinus than Bendigo.
+
+
+
+```{r preparing data, include=FALSE, eval=FALSE}
+ala_bendigo_raw <- read.csv(here::here("data/records_species_bendigo.csv"))
+ala_tullamarine_raw <- read.csv(here::here("data/records_species_tullamarine.csv"))
+
+temp <- ala_bendigo_raw%>%select(Latitude,Longitude)
+temp <- temp[,c(2,1)]
+long_lat_bendigo_raw <- geomean(temp)
+long_lat_bendigo_raw #co-ordinsates of bendigo
+dist_from_bendigo <-  distm(temp, long_lat_bendigo_raw, fun = distGeo)
+ala_bendigo_2000 <- ala_bendigo_raw %>% filter(Year>1999) %>% mutate(plane_storage = c("Bendigo"))#%>%mutate(dist_from_storage = dist_from_bendigo)
+
+
+temp <- ala_tullamarine_raw%>%select(Latitude,Longitude)
+temp <- temp[,c(2,1)]
+long_lat_tullamarine_raw <- geomean(temp)
+long_lat_tullamarine_raw #co-ordinates of tullamarine
+dist_from_tullamarine <-  distm(temp, long_lat_tullamarine_raw, fun = distGeo)
+ala_tullamarine_2000 <- ala_tullamarine_raw %>% filter(Year>1999) %>% mutate(plane_storage = c("Tullamarine"))#%>% mutate(dist_from_storage = dist_from_tullamarine)
+ala_data_1 <- rbind(ala_bendigo_2000, ala_tullamarine_2000)
+write.csv(ala_data_1, here::here("data/ala_data_1.csv"))
+
+
+```
+
+```{r reading-ala-data, include=FALSE}
+#reading ALA data
+
+ala_data_raw <- read.csv(here::here("data/ala_data.csv"))
+ignore_var <- c("Taxon.Concept.GUID","Subspecies","Coordinate.Precision","Minimum.depth.in.meters","Maximum.depth.in.meters","Outlier.for.layer","Minimum.elevation.in.meters","Maximum.elevation.in.meters","Record.ID","Data.Resource.ID","Data.Resource.Name","Institution.ID","Institution","Collection.ID","Licence","Catalogue.Number","Scientific.Name...original","Vernacular.name...original","Institution.Code","Collection.Code","Latitude...original","Longitude...original","Geodetic.datum...original","Basis.Of.Record...original")
+ala_data <- ala_data_raw%>%select(-all_of(ignore_var))
+ala_bendigo <- ala_data%>%filter(plane_storage=="Bendigo")
+ala_tullamarine <- ala_data%>%filter(plane_storage=="Tullamarine")
+
+temp <- ala_bendigo%>%select(Latitude,Longitude)
+temp <- temp[,c(2,1)]
+long_lat_bendigo <- geomean(temp)
+long_lat_bendigo #co-ordinsates of bendigo
+
+temp <- ala_tullamarine%>%select(Latitude,Longitude)
+temp <- temp[,c(2,1)]
+long_lat_tullamarine <- geomean(temp)
+long_lat_tullamarine #co-ordinates of tullamarine
+
+storage_coords <- data.frame(plane_storage=c("Bendigo","Tullamarine"),Longitude = c(long_lat_bendigo[1,"x"], long_lat_tullamarine[1,"x"]), Latitude = c(long_lat_bendigo[1,"y"], long_lat_tullamarine[1,"y"]) )
+
+```
+
+```{r occurence_summary}
+n_occurences <- ala_data%>%group_by(plane_storage)%>%count(Scientific.Name)%>%rename(n_occurences=n)
+knitr::kable(n_occurences, caption = "Occurences")
+```
+
+
+However, it should be noted that organisms follow certain patterns of occurrences seasonally due various climatic and earthly factors. It is obserered that "Neophema (Neonanodes) chrysogaster", "Ornithorhynchus anatinus" and "Petauroides volans" occur throughout the year and other species occur seasonally. It is also noted that "Ornithorhynchus anatinus" occur in all months of the year with most occurrences in Tullamarine. "Anthochaera (Xanthomyza) phrygia" shift their locations seasonally from Bendigo to Tullamarine and then back to Bendigo. In this sense, Bendigo has some risk to affect "Anthochaera (Xanthomyza) phrygia" in the months of January, September and October. However, Tullamarine has in general more occurrences of endangered species across the year.
+
+```{r monthly_analysis}
+#month
+n_occurences_locations_month <- ala_data%>%group_by(plane_storage)%>%count(plane_storage,Month)%>%rename(n_occurences=n)
+#n_occurences_locations_month
+#days <- c("Mon","Tue","Wed","Thu","Fri","Sat","Sun")
+
+#Other Resources [7]
+
+month <- c("Jan","Feb","Mar","Apr","May","June","July","Aug","Sep","Oct","Nov","Dec")
+temp <- n_occurences_locations_month%>%ggplot()+geom_col(mapping = aes(x=
+factor(month[Month],levels=month), y = n_occurences, fill=plane_storage,group=plane_storage), position = "fill")+labs(title="Monthly Occurences",x="Month")+theme(axis.text.x = element_text(angle=60))
+
+temp1 <- ala_data%>%group_by(plane_storage)%>%count(plane_storage,Month, Scientific.Name)%>%rename(n_occurences=n)%>%ggplot()+geom_col(mapping = aes(x=
+factor(month[Month],levels=month), y = n_occurences, fill=plane_storage,group=plane_storage), position = "fill")+theme(axis.text.x =element_blank(),axis.text.y =element_blank())+facet_wrap(~Scientific.Name, nrow=3)+labs(title="Monthly Occurences",x="Month")
+temp+temp1+plot_layout(heights=c(5,5),widths = c(6,6))
+
+```
+
+Species are termed endangered when their occurrence reduces over the years due to anthropogenic and natural influences on their existence. It is essential to lookup on these longitudinal trends to better decide the influence of the activities and climate changes in these location on the existence of such endangered species. Tullamarine has had the least impact on the occurrences as the occurrences have been increasing and decreasing in a non-general trend. However, in Bendigo the occurrences of these species have declined from 2004 onwards with no occurrence in 2012. "Ornithorhynchus anatinus" is the only species to inhabit both locations across all years. In 2020 it was the only species occurring at both locations. However, Tullamarine has more occurrences of "Ornithorhynchus anatinus" than Bendigo. Thus, Tullamarine has been inhabited by different species over two decades and presently holds a larger population of the dwelling species. Thus, Tullamarine is a more promising habitat for these endangered species in Victoria.
+
+```{r yearly_occurences}
+#year
+n_occurences_locations_year <- ala_data%>%group_by(plane_storage)%>%count(plane_storage,Year)%>%rename(n_occurences=n)
+#n_occurences_locations_year
+
+
+temp <- n_occurences_locations_year%>%ggplot()+geom_col(mapping = aes(x = Year, y = n_occurences, fill=plane_storage), position = "fill")+labs(title="Yearly Occurences")+theme(axis.text.x = element_text(angle=60))
+
+temp1 <- n_occurences_locations_year%>%ggplot()+geom_col(mapping = aes(x = Year, y = n_occurences, fill=plane_storage))+theme(axis.text.x = element_text(angle=60),axis.ticks.x=element_blank())+facet_wrap(~plane_storage,nrow=2)
+
+temp+temp1+plot_layout(heights=c(6,6),ncol=2)
+
+
+ala_data%>%group_by(plane_storage)%>%count(plane_storage,Year,Scientific.Name)%>%rename(n_occurences=n)%>%ggplot()+geom_col(mapping = aes(x = Year, y = n_occurences, fill=plane_storage), position = "fill")+facet_wrap(~Scientific.Name)
+
+
+#n_occurences%>%ggplot()+geom_col(mapping = aes(x = Scientific.Name, y = n_occurences, fill=plane_storage), position = "dodge")
+```
+
+Spatial distribution of the occurrences of species is an important factor to assess the feasibility of the plane storage location such that the plane storage airport has the least impact on the existence of these endangered species. From maps below, it is observed that in Tullamarine, species occurrences span the 50km geographic area. However, in Bendigo, the endangered species population surrounds the 50km geographic area, on the circumference. Hence, the plane storage airport could be centered around these creatures having a respectable distance, thus avoiding interruptions in their natural habitat. Therefore, Tullamarine being the better habitat for these creatures and because of spatial distribution of occurrences of species in Bendigo, the latter is a better plane storage location in Victoria, Australia.
+
+```{r}
+#Other Sources [8]
+world <- map_data("world")
+temp <- world%>%filter(region=="Australia")%>%ggplot()+geom_polygon(mapping = aes(x = long, y = lat, group=group, alpha = 0.5))+geom_point(data = ala_data, mapping = aes(x = Longitude, y = Latitude, color = plane_storage))+theme_bw()+labs(title="Map:Occurences",x="",y="")+theme(axis.text.x = element_blank(),axis.text.y = element_blank())
+
+temp1 <- world%>%filter(region=="Australia")%>%ggplot()+geom_polygon(mapping = aes(x = long, y = lat, group=group))+geom_point(data = ala_data, mapping = aes(x = Longitude, y = Latitude, color = Scientific.Name))+ geom_point(data = storage_coords, mapping = aes(x = Longitude, y = Latitude), shape = 21, fill = "white", size= 3)+ facet_wrap(~plane_storage, nrow = 2)+theme_bw()+coord_cartesian(xlim=c(143,146), ylim = c(-39,-36))+labs(x="Longitude",y="Latitude")
+temp+temp1+plot_layout(ncol=1)
+```
+```{r getting_aus_map, include=FALSE, eval=TRUE}
+#Other Sources [6]
+aus_bbox <- c(110, # min long
+              -50, # min lat
+              160, # max long
+              -10) # max lat
+bbox_bendigo_tullamarine <- c(143,-39,146,-36)
+aus_map <- get_map(location =bbox_bendigo_tullamarine, source = "osm")
+```
+```{r message=FALSE,warning=FALSE}
+# Only continental locations will be considered
+
+ggmap(aus_map)+geom_point(data = ala_data, mapping = aes(x = Longitude, y = Latitude, color = Scientific.Name))+ geom_point(data = storage_coords, mapping = aes(x = Longitude, y = Latitude), shape = 21, fill = "white", size= 3)+theme_map()+coord_cartesian(xlim=c(143,146), ylim = c(-39,-36))+annotate("label",x=storage_coords$Longitude[1],y=storage_coords$Latitude[1],label="Bendigo")+annotate("label",x=storage_coords$Longitude[2],y=storage_coords$Latitude[2],label="Tullamarine")
+```
+
+## Resources
+
+
+R Core Team (2021). R: A language and environment for
+statistical computing. R Foundation for Statistical
+Computing, Vienna, Austria. URL
+https://www.R-project.org/.
+
+```{r package-citation}
+x <- citation("tidyverse")
+cat("tidyverse\n\n")
+toBibtex(x)
+
+x<- citation("plotly")
+cat("\n\nplotly\n\n")
+toBibtex(x)%>%print()
+
+x<-citation("visdat")
+cat("\n\nvisdat\n\n")
+toBibtex(x)%>%print()
+
+x<-citation("naniar")
+cat("\n\nnaniar\n\n")
+toBibtex(x)%>%print()
+
+x<-citation("lubridate")
+cat("\n\nlubridate\n\n")
+toBibtex(x)%>%print()
+
+x<-citation("geosphere")
+cat("\n\ngeosphere\n\n")
+toBibtex(x)%>%print()
+
+x<-citation("ggmap")
+cat("\n\nggmap\n\n")
+toBibtex(x)%>%print()
+
+x<-citation("ggthemes")
+cat("\n\nggthemes\n\n")
+toBibtex(x)%>%print()
+
+x<-citation("maps")
+cat("\n\nmaps\n\n")
+toBibtex(x)%>%print()
+
+x<-citation("bookdown")
+cat("\n\nbookdown\n\n")
+toBibtex(x)%>%print()
+
+x<-citation("knitr")
+cat("\n\nknitr\n\n")
+toBibtex(x)%>%print()
+
+x<-citation("patchwork")
+cat("\n\npatchwork\n\n")
+toBibtex(x)%>%print()
+```
+
+Data sources: 
+
+- Task 1 
+  - Office of Airline Information | BUREAU OF TRANSPORTATION STATISTICS | U.S. Department of       Transportation
+    On-Time : Reporting Carrier On-Time Performance (1987-present)
+    https://www.transtats.bts.gov/Fields.asp?gnoyr_VQ=FGJ
+  
+  - Office of Airline Information | BUREAU OF TRANSPORTATION STATISTICS | U.S. Department of       Transportation
+    Aviation Support Tables : Master Coordinate
+    https://www.transtats.bts.gov/Fields.asp?gnoyr_VQ=FLL
+  
+- Task 2
+  - Records in Bendigo:
+    
+    Atlas of Living Australia occurence download at
+    https://doi.org/10.26197/ala.10e91470-60e9-435f-888b-2de8c72fdabe ,
+    Accessed April 2021
+
+  - Records in Tullamarine:
+    
+    Atlas of Living Australia occurence download at
+    https://doi.org/10.26197/ala.75b2f772-82be-4a57-b812-73b4a8012b4e ,
+    Accessed April 2021
+
+Other Resources:
+
+[1] Qantas Group
+  https://www.qantas.com/us/en/qantas-group.html
+  Accessed 15 April 2021
+
+[2] Atlas of Living Australia website at 
+  https://www.ala.org.au/about-ala
+  Accessed 15 April 2021
+  
+[3] RStudio Cloud | Primers | Visualise Data
+    https://rstudio.cloud/learn/primers/3
+    
+[4] RStudio Cloud | Primers | Tidy Your Data
+    https://rstudio.cloud/learn/primers/4
+    
+[5] RStudio Cloud | Primers | Work With Data
+    https://rstudio.cloud/learn/primers/2
+    
+[6] ETC5512: Solutions for Tutorial 4 | Di Cook
+    https://wcd.numbat.space/tutorials/tutorial-04sol.html
+    
+[7] ETC5512: Solution for Tutorial 5 | Belinda Maher
+    https://wcd.numbat.space/tutorials/tutorial-05sol.html
+
+[8] RStudio Cloud | Primers | Visualise Data | Line plots and maps | Maps
+    https://rstudio.cloud/learn/primers/3.6
+
+* This is just a hypothetical scenario for the assignment.
+  ETC5512: Assignment 1 | Prepared by Professor Di Cook
+
+**Glossary**
+
+- **DFW: Dallas/Fort Worth International**
+- **LAX: Los Angeles International**
+
+
+
+## Supplementary information {#supplementary}
+
+### Task1-Recommendation for the primary airport into and out of the USA.
+This BTS ONTIME FLIGHTS DATA data has **`r ncol(flights_filter_DFW_LAX)`** variables and **`r nrow(flights_filter_DFW_LAX)`** records each recording individual flights information in January 2020. 
+The variables in the data are: **`r names(flights_filter_DFW_LAX)`**
+
+This data contains in every observation, either DFW or LAX in either ORIGIN or DEST varibales.
+
+```{r airport_display, fig.cap="displaying airport connectivity"}
+flights_filter_DFW_LAX%>%ggplot()+geom_count(mapping = aes(x = ORIGIN, y = DEST))+labs(title="Displaying Airport Connectivity", xlab = "Origin Airports", y = "Destination Airports")
+```
+
+On plotting relation between outbound and inbound traffic, it is observed that inbound and outbound flight traffic is comparable for both DFW and LAX. Therefore, outbound traffic,in terms of numbers, is a representation of inbound traffic and vice-versa.
+
+
+```{r plot-traffic, message=FALSE}
+ggplot(airport_flights_LAX_DFW_wider, aes(x=outbound_from_airport, y=inbound_to_airport)) + geom_point()+geom_smooth()+ facet_wrap(~airport) +coord_equal()
+```
+
+This brings us to check the connecting flights between DFW and LAX. The table below shows the top 5 airports connecting to each of the airports, DFW and LAX. It can be noted that DFW and LAX are connected well by over 1150 flights
+```{r airport_connectivity_display}
+temp1 <- airport_flights_LAX_DFW%>%filter(airport=="DFW", outboundorinbound=="inbound_to_airport")%>%select(-outboundorinbound)%>%arrange(desc(n_flights))%>%head(5)
+temp <- airport_flights_LAX_DFW%>%filter(airport=="LAX", outboundorinbound=="inbound_to_airport")%>%select(-outboundorinbound)%>%arrange(desc(n_flights))%>%head(5)
+temp <- rbind(temp1,temp)
+knitr::kable(temp, caption = "Top 5 airports connecting to DFW and LAX")
+
+```
+
+Most traffic is on Thursday and Friday for both airports: DFW and LAX.
+
+```{r weekly-traffic}
+
+ 
+
+origin_LAX_DFW_flights_w <- flights_DFW_LAX_org %>%
+                      group_by(ORIGIN, DAY_OF_WEEK) %>% count(ORIGIN)%>%
+                       
+                        rename(from_airport=n,airport=ORIGIN)
+dest_LAX_DFW_flights_w <- flights_DFW_LAX_dest%>%
+                            group_by(DEST, DAY_OF_WEEK) %>% count(DEST)%>%
+                              rename(to_airport=n,airport=DEST)
+# origin_LAX_DFW_flights_w contains the number of flights from LAX and DFW airports per day
+# dest_LAX_DFW_flights_w   #contains the number of flights to LAX and DFW airports per day
+
+airport_flights_LAX_DFW_w <- origin_LAX_DFW_flights_w %>%
+                            full_join(dest_LAX_DFW_flights_w,  by=c("DAY_OF_WEEK"="DAY_OF_WEEK", "airport"="airport"))
+airport_flights_LAX_DFW_w <- airport_flights_LAX_DFW_w %>%
+  pivot_longer(cols=c("from_airport","to_airport"),
+               names_to="outboundorinbound",
+                values_to="n_flights")  #number of inbound and otbound to each airport per day
+#airport_flights_LAX_DFW_w
+```
+```{r from-airport-daily, message=FALSE}
+#Other Resources [7]
+
+days <- c("Mon","Tue","Wed","Thu","Fri","Sat","Sun")
+ggplot(data=airport_flights_LAX_DFW_w,
+aes(x=
+factor(days[DAY_OF_WEEK],levels=days),
+y=n_flights,
+colour=as.character(airport),
+group=airport))+ labs(
+title="Daily Flights From/To Each Airport",
+x="Day", colour="airport",
+y="Number of Flights") +
+geom_line() + facet_grid(~outboundorinbound)
+theme(legend.position="bottom")
+```
+
+```{r missing-data, include=FALSE}
+#checking missingness in data.
+
+
+prop_miss(flights_filter_DFW_LAX)
+missing_full_data <- vis_miss(flights_filter_DFW_LAX, warn_large_data = FALSE)
+missing_full_data
+missing_var_full_data <- miss_var_summary(flights_filter_DFW_LAX)%>%filter(n_miss>0)
+missing_case_full_data <-miss_case_summary(flights_filter_DFW_LAX)%>%filter(n_miss>0)
+
+missing_org_var <- flights_DFW_LAX_org%>%group_by(ORIGIN)%>%miss_var_table()
+missing_dest_var <-flights_DFW_LAX_dest%>%group_by(DEST)%>%miss_var_table()
+
+missing_org_case <- flights_DFW_LAX_org%>%group_by(ORIGIN)%>%miss_case_table()
+missing_dest_case <- flights_DFW_LAX_dest%>%group_by(DEST)%>%miss_case_table()
+
+missing_org_var_plt <- gg_miss_var(flights_DFW_LAX_org, facet=ORIGIN)
+missing_dest_var_plt <- gg_miss_var(flights_DFW_LAX_dest, facet=DEST)
+
+missing_org_case_plt <- gg_miss_case(flights_DFW_LAX_org, facet=ORIGIN)
+missing_dest_case_plt <- gg_miss_case(flights_DFW_LAX_dest, facet=DEST)
+miss_var_summary(flights_filter_DFW_LAX)%>%filter(n_miss>0)
+```
+
+Since, the missingness is `r pct_miss(flights_filter_DFW_LAX)` and is negligible and there is missingness only in `r count(missing_var_full_data)` variables: dep_time, dep_delay, arr_time, arr_delay  with only `r count(missing_case_full_data)` observations having missing values and constituting `r count(missing_case_full_data)/nrow(flights_filter_DFW_LAX)` percent of missingness of all observations and hence are omitted for delay analysis.
+
+LAX performs better on busy days, Thursday and Friday.
+
+```{r daily-delays}
+days <- c("Mon","Tue","Wed","Thu","Fri","Sat","Sun")
+flights_DFW_LAX_org_longer%>%ggplot(
+aes(x=
+factor(days[DAY_OF_WEEK],levels=days),
+y= delay,
+colour=as.character(DAY_OF_WEEK),
+group=DAY_OF_WEEK))+ labs(
+title="Daily Delays of Origin Airports: DFW/LAX ",
+x="Day", colour="DAY_OF_WEEK",
+y="Delay") +
+geom_boxplot(outlier.alpha = 0) + facet_grid(ORIGIN~delay_type)+
+theme(legend.position="bottom")+coord_cartesian(ylim = c(-50,55))
+
+flights_DFW_LAX_dest_longer%>%ggplot(
+aes(x=
+factor(days[DAY_OF_WEEK],levels=days),
+y= delay,
+colour=as.character(DAY_OF_WEEK),
+group=DAY_OF_WEEK))+ labs(
+title="Daily Delays of DEST Airports: DFW/LAX ",
+x="Day", colour="DAY_OF_WEEK",
+y="Delay") +
+geom_boxplot(outlier.alpha = 0) + facet_grid(DEST~delay_type)+
+theme(legend.position="bottom")+coord_cartesian(ylim = c(-50,55))
+```
+
+Summary of delays
+```{r}
+delay_table
+```
+
+- At 75th quartile- lax flights have lesser arrival and departure delay than dfw flights. when lax is dest, the arrival delay is 0. however, when lax and dfw are dest, they have same departure delay. Therefore LAX performs better both as origin and dest in terms of delay at 75th quartile
+
+- At 25th quartile- the departure delays, for lax and dfw as both origin and dest, are comparable. however, lax as both origin and dest, has flights arriving faster than the dfw flights. Therefore ,LAX performs better both as origin and dest in terms of delay at 25th quartile.
+
+- At median delay- lax flights arrive(arrival delay) much earlier than dfw flights, 3 mintues earlier when lax is origin and 6 minutes earlier for lax as dest. lax flights and dfw flights have comparable delays for departure. Therefore, LAX performs better both as origin and dest in terms of delay at median.
+
+- At 10th percentile and 90th percentile LAX performs better than DFW following the above pattern of analysis.
+
+- The minimum delays for DFW and LAX fall within a small range of [-96,-20] and flights associated with LAX arrive earlier.
+
+- The maximum delays for DFW and LAX fall within a larger range of [1185,2536] and flights associated with LAX have smaller delays. The maximum delay for a DFW flight is near double to the LAX flight.
+
+Therefore, LAX performs better than DFW in terms of delays associated with flights.
+
+
+### Task2 - Recommendation on selecting new plane storage facility in Victoria, Australia.
+
+Missingness in ALA Data
+
+```{r eval= TRUE}
+#checking missingness in ala data
+
+prop_miss(ala_data)
+missing_ala_data <- vis_miss(ala_data, warn_large_data = FALSE)
+missing_ala_data
+miss_var_table(ala_data)
+miss_var_summary(ala_data)
+
+
+```
+
+occurence_summary_graph
+
+```{r occurence_summary_graph}
+ala_data%>%ggplot()+
+            geom_count(mapping = aes(x = plane_storage, y = Scientific.Name))
+```
+
+yearly occurence
+
+```{r}
+ala_data%>%ggplot()+geom_count(mapping = aes(x = plane_storage, y = Scientific.Name, colour=plane_storage))+facet_wrap(~as.character(Year), nrow = 5)
+```
+
+
